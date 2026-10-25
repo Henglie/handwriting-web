@@ -32,6 +32,8 @@ from handright import Template, handwrite
 # from threading import Thread
 from PIL import Image, ImageDraw, ImageFont
 
+from linebreak import break_lines
+
 load_dotenv()
 import gc
 import io
@@ -745,15 +747,54 @@ def apply_right_align(text, template):
     return "\n".join(output)
 
 
+def apply_word_wrap(text, template):
+    """Insert line breaks so space-delimited words stay on one line.
+
+    handright wraps glyph by glyph, which splits English words and can start a
+    line with punctuation. Breaking the text beforehand keeps its layout rules
+    (margins, font size, line spacing) intact: every newline here is a position
+    where handright would have wrapped anyway or slightly earlier.
+    """
+    font = template.get_font()
+    word_spacing = template.get_word_spacing()
+    width = template.get_size()[0]
+    # handright wraps once the pen passes this limit, reserving one nominal
+    # font-size cell at the right edge.
+    max_width = (
+        width - template.get_left_margin() - template.get_right_margin() - font.size
+    )
+    if max_width <= 0:
+        return text
+
+    def advance(char):
+        left, _, right, _ = font.getbbox(char)
+        return (right - left) + word_spacing
+
+    # handright jitters the spacing of every glyph, so keep a little room when
+    # deciding whether a word still fits; otherwise the jitter can push it over
+    # the limit and handright would split it anyway.
+    word_margin = max(0.0, 2.0 * template.get_word_spacing_sigma())
+
+    wrapped = break_lines(text, advance, max_width, word_margin=word_margin)
+    if wrapped != text:
+        logger.info(
+            "word-aware wrapping: %s line(s) -> %s line(s)",
+            text.count("\n") + 1,
+            wrapped.count("\n") + 1,
+        )
+    return wrapped
+
+
 def handwrite_with_page_breaks(text, template):
     """Render text while honoring manual page-break and alignment markers."""
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
     aligned = apply_right_align(normalized, template)
+    wrapped = apply_word_wrap(aligned, template)
 
-    if not _PAGE_BREAK_RE.search(aligned):
-        return handwrite(aligned, template)
+    if not _PAGE_BREAK_RE.search(wrapped):
+        return handwrite(wrapped, template)
 
-    raw_chunks = _PAGE_BREAK_RE.split(aligned)
+    raw_chunks = _PAGE_BREAK_RE.split(wrapped)
     chunks = []
     for index, chunk in enumerate(raw_chunks):
         # Splitting a marker-only line leaves one delimiter newline on each

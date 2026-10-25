@@ -29,6 +29,9 @@ class FakeTemplate:
     def get_word_spacing(self):
         return 0
 
+    def get_word_spacing_sigma(self):
+        return 0
+
     def get_size(self):
         return (200, 300)
 
