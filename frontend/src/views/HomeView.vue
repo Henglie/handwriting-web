@@ -119,6 +119,14 @@
           <label for="optionEnglishSpacing">{{ $t('message.enableEnglishSpacing') }}</label>
         </div>
 
+        <div class="check-container">
+          <input type="checkbox" id="optionTransparentBackground" name="optionTransparentBackground"
+            value="transparentBackground" v-model="transparentBackground"
+            data-testid="transparent-background-checkbox">
+          <label for="optionTransparentBackground"
+            :title="$t('message.transparentBackgroundHint')">{{ $t('message.transparentBackground') }}</label>
+        </div>
+
         <div class="label-container">
           <label for="fontSizeInput">{{ $t('message.fontSize') }}:</label>
           <input id="fontSizeInput" type="number" v-model="fontSize" data-testid="font-size-input" placeholder="recommend > 100" />
@@ -399,6 +407,12 @@
         <input class="optionEnglishSpacing" type="checkbox" id="optionEnglishSpacing" name="optionEnglishSpacing"
           value="englishSpacing" v-model="enableEnglishSpacing">
         <label for="optionEnglishSpacing" style="margin-right: 0px;">{{ $t('message.enableEnglishSpacing') }}</label>
+
+        <input type="checkbox" id="optionTransparentBackground" name="optionTransparentBackground"
+          value="transparentBackground" v-model="transparentBackground"
+          data-testid="transparent-background-checkbox">
+        <label for="optionTransparentBackground" style="margin-right: 0px;"
+          :title="$t('message.transparentBackgroundHint')">{{ $t('message.transparentBackground') }}</label>
 
         <div class="label-container">
           <label>{{ $t('message.fontSize') }}:
@@ -699,6 +713,8 @@ export default {
       ink_depth_sigma: 30,
       isUnderlined: true,
       enableEnglishSpacing: false,
+      // 透明背景导出：只保留笔画，导出 PNG 可叠加到别的图上
+      transparentBackground: false,
       isExpanded: false,
       // 生成状态控制
       isGenerating: false,
@@ -723,7 +739,7 @@ export default {
       resizeState: null,
       showLetterFormatter: false,
       letterFormatBackup: null,
-      localStorageItems: ['text', 'fontFile', 'fontSize', 'lineSpacing', 'fill', 'width', 'height', 'marginTop', 'marginBottom', 'marginLeft', 'marginRight', 'selectedFontFileName', 'selectedOption', 'lineSpacingSigma', 'fontSizeSigma', 'wordSpacingSigma', 'perturbXSigma', 'perturbYSigma', 'perturbThetaSigma', 'wordSpacing', 'strikethrough_length_sigma', 'strikethrough_angle_sigma', 'strikethrough_width_sigma', 'strikethrough_probability', 'strikethrough_width', 'ink_depth_sigma', 'isUnderlined', 'enableEnglishSpacing'],
+      localStorageItems: ['text', 'fontFile', 'fontSize', 'lineSpacing', 'fill', 'width', 'height', 'marginTop', 'marginBottom', 'marginLeft', 'marginRight', 'selectedFontFileName', 'selectedOption', 'lineSpacingSigma', 'fontSizeSigma', 'wordSpacingSigma', 'perturbXSigma', 'perturbYSigma', 'perturbThetaSigma', 'wordSpacing', 'strikethrough_length_sigma', 'strikethrough_angle_sigma', 'strikethrough_width_sigma', 'strikethrough_probability', 'strikethrough_width', 'ink_depth_sigma', 'isUnderlined', 'enableEnglishSpacing', 'transparentBackground'],
       // 这些项在 created() 里统一从 localStorage 还原。
       // workspaceColumns 没有配 watcher：拖动过程中每帧都写一次不值得，改成收手时才落盘
       persistentUiItems: ['enableFullPreview', 'legacyLayout', 'workspaceColumns'],
@@ -1108,6 +1124,12 @@ export default {
     enableEnglishSpacing: {
       handler(newVal) {
         localStorage.setItem('enableEnglishSpacing', JSON.stringify(newVal));
+      },
+      deep: true
+    },
+    transparentBackground: {
+      handler(newVal) {
+        localStorage.setItem('transparentBackground', JSON.stringify(newVal));
       },
       deep: true
     },
@@ -1754,6 +1776,7 @@ export default {
       formData.append("pdf_save", pdf_save.toString());
       formData.append("isUnderlined", this.isUnderlined.toString());
       formData.append("enableEnglishSpacing", this.enableEnglishSpacing.toString());
+      formData.append("transparent_background", this.transparentBackground.toString());
       
       // 根据环境与按钮决定是否启用多页预览
       const isDevEnv = process.env.NODE_ENV === 'development';
@@ -1904,6 +1927,7 @@ export default {
       this.ink_depth_sigma = 30;
       this.isUnderlined = true;
       this.enableEnglishSpacing = false;
+      this.transparentBackground = false;
       this.errorMessage = '';
       this.message = '';
       this.uploadMessage = '';
