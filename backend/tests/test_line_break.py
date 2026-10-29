@@ -212,6 +212,23 @@ class ApplyWordWrapTest(unittest.TestCase):
         )
         self.assertEqual(handwrite_mock.call_args_list[1].args[0], "second page")
 
+    @patch("app.apply_word_wrap")
+    @patch("app.handwrite")
+    def test_a_wrapped_marker_does_not_create_a_page_break(
+        self, handwrite_mock, word_wrap_mock
+    ):
+        # 2026-10-25：先断行可能把段落末尾的 "---" 挤到单独一行，误命中分页
+        # 标记。这里让断行故意输出这种结果，验证分页是在断行之前切的。
+        word_wrap_mock.side_effect = lambda text, _: text.replace(
+            " --- ", "\n---\n"
+        )
+        handwrite_mock.side_effect = lambda text, _: [text]
+        template = latin_template()
+
+        list(handwrite_with_page_breaks("word --- second", template))
+
+        self.assertEqual(handwrite_mock.call_count, 1)
+
 
 class RenderTest(unittest.TestCase):
     def test_wrapped_latin_text_renders_inside_the_canvas(self):

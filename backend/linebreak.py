@@ -1,35 +1,31 @@
-"""Word-aware line breaking for text rendered by handright.
+"""给 handright 渲染的文本做按词断行。
 
-handright wraps text one glyph at a time (``handright/_core.py`` checks the
-pen position before every glyph), so it happily splits an English word across
-two lines. It also lets a closing punctuation mark start a new line when the
-mark is not in its ``end_chars`` set.
+2026-10-25：handright 每次画字前判断笔位，逐字换行（``handright/_core.py``），
+英文单词会被拆到两行；闭标点不在它的 ``end_chars`` 里时，还会落到行首。
 
-The functions here pre-compute the line breaks and insert explicit newlines,
-which handright treats as hard line ends. Only space-delimited runs are
-affected: a paragraph without spaces is returned untouched, so pure CJK text
-keeps handright's own (and therefore unchanged) wrapping.
+这里的函数预先算好断行并插入显式换行，handright 会把换行当成硬换行。只处理
+带空白的段落：没有空白的段落原样返回，纯中文继续交给 handright 自己换行，
+行为不变。
 """
 
 import unicodedata
 
-# Closing punctuation that must not be pushed to the start of a line.
-# Mirrors handright's default ``end_chars``.
+# 2026-10-25：不能出现在行首的闭标点，与 handright 默认的 ``end_chars`` 一致。
 CLOSING_PUNCTUATION = "，。》？；：’”】｝、！％）,.>?;:]}!%)′″℃℉"
 
 _SPACES = " \t"
 
 
 def is_wide(char):
-    """True for characters that are laid out one per cell (CJK and friends)."""
+    """判断是否为按单格排版的宽字符（中文及同类字符）。"""
     return unicodedata.east_asian_width(char) in ("W", "F")
 
 
 def _tokenize(paragraph, advance):
-    """Split a paragraph into (kind, text, width) units.
+    """把段落拆成 (类型, 文本, 宽度) 单元。
 
-    Wide characters are single-character units, runs of narrow (Latin, digit,
-    symbol) characters are whole words, and runs of spaces are their own units.
+    宽字符各成一个单元，连续的窄字符（英文、数字、符号）合成整词，连续空格
+    也自成一个单元。
     """
     tokens = []
     index = 0
@@ -61,10 +57,9 @@ def _tokenize(paragraph, advance):
 
 
 def _needs_wrapping(paragraph):
-    """True when the paragraph is space-delimited.
+    """段落含空白时才需要按词断行。
 
-    Without a space there is nothing to keep together, so the paragraph is left
-    to handright and Chinese text keeps exactly the line breaks it had before.
+    没有空白就没有需要保持完整的词，整段交给 handright，中文保持原来的断行。
     """
     return any(char in _SPACES for char in paragraph)
 
@@ -90,8 +85,7 @@ def _wrap_paragraph(paragraph, advance, max_width, end_chars, word_margin):
     for kind, text, width in _tokenize(paragraph, advance):
         if kind == "space":
             if not current:
-                # A space produced by a break is consumed by the break itself;
-                # indentation at the start of a line is kept.
+                # 2026-10-25：断行处产生的空格被断行本身吃掉，行首缩进保留。
                 if after_break:
                     continue
                 current.append((kind, text))
@@ -105,14 +99,14 @@ def _wrap_paragraph(paragraph, advance, max_width, end_chars, word_margin):
             continue
 
         if kind == "word":
-            # A word has to fit as a whole; only an over-long word is broken.
+            # 2026-10-25：单词必须整体放下，只有超长的单词才逐字拆开。
             if x + width <= max_width - word_margin:
                 current.append((kind, text))
                 x += width
                 continue
             if current:
-                # Closing punctuation must not start a line, so keep it on the
-                # current line even though it then hangs past the margin.
+                # 2026-10-25：闭标点不能落到行首，即使悬挂到右边距外也留在
+                # 当前行。
                 while text and text[0] in end_chars:
                     char = text[0]
                     current.append(("char", char))
@@ -131,16 +125,16 @@ def _wrap_paragraph(paragraph, advance, max_width, end_chars, word_margin):
                 x += width
                 continue
             for char in text:
-                # Same rule handright uses for a single glyph: it is placed
-                # while the pen position is still inside the usable width.
+                # 2026-10-25：沿用 handright 对单个字的规则：笔位仍在上限内
+                # 时才落字。
                 if current and x > max_width:
                     start_new_line()
                 current.append(("char", char))
                 x += advance(char)
             continue
 
-        # Wide character: break before it, unless it is closing punctuation
-        # that may hang past the right margin instead of starting a line.
+        # 2026-10-25：宽字符在它前面断行；若它是可以悬挂到右边距外的闭标点，
+        # 则不断行，避免落到行首。
         if current and x > max_width and text not in end_chars:
             start_new_line()
         current.append((kind, text))
@@ -157,12 +151,11 @@ def break_lines(
     end_chars=CLOSING_PUNCTUATION,
     word_margin=0.0,
 ):
-    """Insert explicit newlines into ``text``.
+    """在 ``text`` 中插入显式换行。
 
-    ``advance(char)`` returns the pen advance of a glyph, ``max_width`` is the
-    usable width (page width minus margins and one nominal font-size cell, the
-    same limit handright uses). ``word_margin`` reserves extra room when
-    deciding whether a word fits, for callers that perturb glyph spacing.
+    ``advance(char)`` 返回一个字的笔进宽度，``max_width`` 是可用宽度（页宽减
+    去左右边距和一个字宽，与 handright 的上限一致）。``word_margin`` 用于在
+    判断单词是否放得下时预留余量，供会扰动字距的调用方使用。
     """
     if max_width <= 0:
         return text

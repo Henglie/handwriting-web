@@ -748,18 +748,16 @@ def apply_right_align(text, template):
 
 
 def apply_word_wrap(text, template):
-    """Insert line breaks so space-delimited words stay on one line.
+    """按空白整体换行英文单词，避免 handright 把单词从中间截断。
 
-    handright wraps glyph by glyph, which splits English words and can start a
-    line with punctuation. Breaking the text beforehand keeps its layout rules
-    (margins, font size, line spacing) intact: every newline here is a position
-    where handright would have wrapped anyway or slightly earlier.
+    2026-10-25：handright 逐字判断笔位，英文单词会被拦腰截断，行首也可能落下
+    标点。这里先算好断行位置并插入显式换行，边距、字号、行距仍按原来的规则
+    走：每个换行点都是 handright 本来就会（或稍早）换行的位置。
     """
     font = template.get_font()
     word_spacing = template.get_word_spacing()
     width = template.get_size()[0]
-    # handright wraps once the pen passes this limit, reserving one nominal
-    # font-size cell at the right edge.
+    # 2026-10-25：handright 在笔位越过这个上限时换行，右边缘预留一个字宽。
     max_width = (
         width - template.get_left_margin() - template.get_right_margin() - font.size
     )
@@ -770,9 +768,8 @@ def apply_word_wrap(text, template):
         left, _, right, _ = font.getbbox(char)
         return (right - left) + word_spacing
 
-    # handright jitters the spacing of every glyph, so keep a little room when
-    # deciding whether a word still fits; otherwise the jitter can push it over
-    # the limit and handright would split it anyway.
+    # 2026-10-25：handright 会对每个字的字距做随机扰动，判断单词是否放得下时
+    # 留一点余量，否则扰动会把它推过上限，又被 handright 拆开。
     word_margin = max(0.0, 2.0 * template.get_word_spacing_sigma())
 
     wrapped = break_lines(text, advance, max_width, word_margin=word_margin)
@@ -789,12 +786,13 @@ def handwrite_with_page_breaks(text, template):
     """Render text while honoring manual page-break and alignment markers."""
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
     aligned = apply_right_align(normalized, template)
-    wrapped = apply_word_wrap(aligned, template)
 
-    if not _PAGE_BREAK_RE.search(wrapped):
-        return handwrite(wrapped, template)
+    # 2026-10-25：先按原始文本切分页，再对每个分块断行。如果先断行，段落末尾
+    # 的 "---" 可能被挤到单独一行，误命中分页标记，凭空多出一页。
+    if not _PAGE_BREAK_RE.search(aligned):
+        return handwrite(apply_word_wrap(aligned, template), template)
 
-    raw_chunks = _PAGE_BREAK_RE.split(wrapped)
+    raw_chunks = _PAGE_BREAK_RE.split(aligned)
     chunks = []
     for index, chunk in enumerate(raw_chunks):
         # Splitting a marker-only line leaves one delimiter newline on each
@@ -805,7 +803,7 @@ def handwrite_with_page_breaks(text, template):
         if index < len(raw_chunks) - 1 and chunk.endswith("\n"):
             chunk = chunk[:-1]
         if chunk.strip():
-            chunks.append(chunk)
+            chunks.append(apply_word_wrap(chunk, template))
     logger.info("manual page break detected: %s chunk(s)", len(chunks))
 
     if not chunks:
