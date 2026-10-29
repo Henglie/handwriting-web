@@ -151,6 +151,23 @@ class WordBreakTest(unittest.TestCase):
 
         self.assertEqual(break_lines(text, fixed_advance, 100), text)
 
+    def test_first_line_indentation_survives_an_overflowing_first_word(self):
+        text = "     aaaaaaaa b"
+
+        lines = break_lines(text, fixed_advance, 100).split("\n")
+
+        self.assertTrue(lines[0].startswith("     "))
+        self.assertNotEqual(lines[0].strip(), "")
+
+    def test_closing_punctuation_after_an_overflowing_space_stays_put(self):
+        text = "aaaaaaaaa  , tail"
+
+        lines = break_lines(text, fixed_advance, 100).split("\n")
+
+        self.assertTrue(lines[0].endswith(","))
+        for line in lines:
+            self.assertFalse(line.startswith(","))
+
 
 class HandrightAgreementTest(unittest.TestCase):
     def test_cjk_breaks_inside_a_mixed_paragraph_match_handright(self):

@@ -72,15 +72,19 @@ def _wrap_paragraph(paragraph, advance, max_width, end_chars, word_margin):
     current = []
     x = 0.0
     after_break = False
+    # 2026-10-25：空格超出边距时先不换行，等下一个词出现再决定，这样闭标点
+    # 可以留在上一行，不会被空格挤到行首。
+    pending_break = False
 
     def start_new_line():
-        nonlocal x, after_break
+        nonlocal x, after_break, pending_break
         while current and current[-1][0] == "space":
             current.pop()
         lines.append("".join(text for _, text in current))
         current.clear()
         x = 0.0
         after_break = True
+        pending_break = False
 
     for kind, text, width in _tokenize(paragraph, advance):
         if kind == "space":
@@ -92,19 +96,35 @@ def _wrap_paragraph(paragraph, advance, max_width, end_chars, word_margin):
                 x += width
                 continue
             if x + width > max_width:
-                start_new_line()
+                pending_break = True
                 continue
             current.append((kind, text))
             x += width
             continue
 
         if kind == "word":
+            if pending_break:
+                # 2026-10-25：先看这个词是不是闭标点；是就悬挂在上一行，不是
+                # 才真正换行。
+                while text and text[0] in end_chars:
+                    char = text[0]
+                    current.append(("char", char))
+                    x += advance(char)
+                    text = text[1:]
+                pending_break = False
+                if not text:
+                    continue
+                width = sum(advance(c) for c in text)
+                start_new_line()
             # 2026-10-25：单词必须整体放下，只有超长的单词才逐字拆开。
             if x + width <= max_width - word_margin:
                 current.append((kind, text))
                 x += width
                 continue
-            if current:
+            indent_only = bool(current) and all(
+                part == "space" for part, _ in current
+            )
+            if current and not indent_only:
                 # 2026-10-25：闭标点不能落到行首，即使悬挂到右边距外也留在
                 # 当前行。
                 while text and text[0] in end_chars:
@@ -120,7 +140,7 @@ def _wrap_paragraph(paragraph, advance, max_width, end_chars, word_margin):
                     x += width
                     continue
                 start_new_line()
-            if width <= max_width - word_margin:
+            if not indent_only and width <= max_width - word_margin:
                 current.append((kind, text))
                 x += width
                 continue
@@ -135,6 +155,13 @@ def _wrap_paragraph(paragraph, advance, max_width, end_chars, word_margin):
 
         # 2026-10-25：宽字符在它前面断行；若它是可以悬挂到右边距外的闭标点，
         # 则不断行，避免落到行首。
+        if pending_break:
+            pending_break = False
+            if text in end_chars:
+                current.append((kind, text))
+                x += width
+                continue
+            start_new_line()
         if current and x > max_width and text not in end_chars:
             start_new_line()
         current.append((kind, text))
