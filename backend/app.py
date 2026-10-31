@@ -2,6 +2,7 @@ import asyncio
 import base64
 import itertools
 import json
+import math
 import re
 import time
 from typing import Any, Optional, Union
@@ -687,11 +688,12 @@ _PAGE_BREAK_RE = re.compile(r"(?m)^[ \t]*-{3,}[ \t]*$")
 _RIGHT_ALIGN_RE = re.compile(r"^[ \t]*>>>[ \t]?")
 
 
-def apply_right_align(text, template):
-    """Replace right-align markers with full-width-space padding."""
-    if ">>>" not in text:
-        return text
+def _make_right_aligner(template):
+    """返回逐行右对齐函数；不是 ``>>>`` 行时返回 None。
 
+    2026-10-31：从 apply_right_align 拆出来，供 _wrap_text 逐行调用，让右对齐
+    行不再经过按词断行。
+    """
     font = template.get_font()
     word_spacing = template.get_word_spacing()
     width = template.get_size()[0]
@@ -705,20 +707,15 @@ def apply_right_align(text, template):
         return (right - left) + word_spacing
 
     pad_unit = advance("　")
-    output = []
-    aligned_count = 0
 
-    for line in text.split("\n"):
+    def align(line):
         marker = _RIGHT_ALIGN_RE.match(line)
         if not marker:
-            output.append(line)
-            continue
+            return None
 
         content = line[marker.end():]
         if not content:
-            output.append("")
-            aligned_count += 1
-            continue
+            return ""
 
         # Handright decides whether to wrap before drawing each glyph. Its
         # threshold reserves one nominal font-size cell at the right edge.
@@ -739,7 +736,26 @@ def apply_right_align(text, template):
         else:
             pad_count = 0
 
-        output.append("　" * pad_count + content)
+        return "　" * pad_count + content
+
+    return align
+
+
+def apply_right_align(text, template):
+    """Replace right-align markers with full-width-space padding."""
+    if ">>>" not in text:
+        return text
+
+    align = _make_right_aligner(template)
+    output = []
+    aligned_count = 0
+
+    for line in text.split("\n"):
+        aligned = align(line)
+        if aligned is None:
+            output.append(line)
+            continue
+        output.append(aligned)
         aligned_count += 1
 
     if aligned_count:
@@ -747,7 +763,7 @@ def apply_right_align(text, template):
     return "\n".join(output)
 
 
-def apply_word_wrap(text, template):
+def apply_word_wrap(text, template, log=True):
     """按空白整体换行英文单词，避免 handright 把单词从中间截断。
 
     2026-10-25：handright 逐字判断笔位，英文单词会被拦腰截断，行首也可能落下
@@ -770,10 +786,43 @@ def apply_word_wrap(text, template):
 
     # 2026-10-25：handright 会对每个字的字距做随机扰动，判断单词是否放得下时
     # 留一点余量，否则扰动会把它推过上限，又被 handright 拆开。
-    word_margin = max(0.0, 2.0 * template.get_word_spacing_sigma())
+    word_spacing_sigma = template.get_word_spacing_sigma()
+    font_size_sigma = template.get_font_size_sigma()
+    word_margin = max(0.0, 2.0 * word_spacing_sigma)
 
-    wrapped = break_lines(text, advance, max_width, word_margin=word_margin)
-    if wrapped != text:
+    # 2026-10-31：逐字推进的扰动会累积。宽字符断点必须比 handright 的实际断点
+    # 早一点，否则最后一个字会被 handright 挪到下一行，再撞上这里插入的硬换行，
+    # 变成孤零零的一行。按 3 倍标准差估计一行内的累计漂移。
+    def drift_margin(x, count):
+        spacing = 3.0 * math.sqrt(count + 1) * word_spacing_sigma
+        size = (
+            3.0 * font_size_sigma * math.sqrt(max(x, 0.0) / font.size)
+            if font.size
+            else 0.0
+        )
+        return spacing + size
+
+    # 2026-10-31：涂改功能会在随机位置先多画一个字（可能抽到换行符或宽字符，
+    # 宽度约等于一个字号，还会叠加字号扰动与字距）。一行里偶尔会抽中两个，
+    # 按 1.5 个字宽预留；那一下的推进不计入上面的漂移估计。
+    stray_margin = 0.0
+    if template.get_strikethrough_probability() > 0:
+        stray_margin = (
+            1.5 * font.size
+            + 2.0 * font_size_sigma
+            + max(0.0, float(word_spacing))
+            + 4.0
+        )
+
+    wrapped = break_lines(
+        text,
+        advance,
+        max_width,
+        word_margin=word_margin,
+        drift_margin=drift_margin,
+        stray_margin=stray_margin,
+    )
+    if log and wrapped != text:
         logger.info(
             "word-aware wrapping: %s line(s) -> %s line(s)",
             text.count("\n") + 1,
@@ -782,17 +831,36 @@ def apply_word_wrap(text, template):
     return wrapped
 
 
+def _wrap_text(text, template):
+    """逐行排版：右对齐行已经由 apply_right_align 排好，不再按词重排。
+
+    2026-10-31：右对齐行补的是全角空格，只保证最后一个字的起点在上限内；
+    按词断行要求整个词结束在上限内，会把签名末尾的单词推到下一行，右对齐
+    随之失效。
+    """
+    align = _make_right_aligner(template)
+    output = []
+    for line in text.split("\n"):
+        aligned = align(line)
+        if aligned is None:
+            output.append(apply_word_wrap(line, template, log=False))
+        else:
+            output.append(aligned)
+    return "\n".join(output)
+
+
 def handwrite_with_page_breaks(text, template):
     """Render text while honoring manual page-break and alignment markers."""
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
-    aligned = apply_right_align(normalized, template)
 
     # 2026-10-25：先按原始文本切分页，再对每个分块断行。如果先断行，段落末尾
     # 的 "---" 可能被挤到单独一行，误命中分页标记，凭空多出一页。
-    if not _PAGE_BREAK_RE.search(aligned):
-        return handwrite(apply_word_wrap(aligned, template), template)
+    # 2026-10-31：分页在未对齐的原文上切，右对齐与断行改由 _wrap_text 逐行处理，
+    # 避免右对齐行被二次断行。
+    if not _PAGE_BREAK_RE.search(normalized):
+        return handwrite(_wrap_text(normalized, template), template)
 
-    raw_chunks = _PAGE_BREAK_RE.split(aligned)
+    raw_chunks = _PAGE_BREAK_RE.split(normalized)
     chunks = []
     for index, chunk in enumerate(raw_chunks):
         # Splitting a marker-only line leaves one delimiter newline on each
@@ -803,7 +871,7 @@ def handwrite_with_page_breaks(text, template):
         if index < len(raw_chunks) - 1 and chunk.endswith("\n"):
             chunk = chunk[:-1]
         if chunk.strip():
-            chunks.append(apply_word_wrap(chunk, template))
+            chunks.append(_wrap_text(chunk, template))
     logger.info("manual page break detected: %s chunk(s)", len(chunks))
 
     if not chunks:

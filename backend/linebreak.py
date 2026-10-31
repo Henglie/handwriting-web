@@ -64,27 +64,56 @@ def _needs_wrapping(paragraph):
     return any(char in _SPACES for char in paragraph)
 
 
-def _wrap_paragraph(paragraph, advance, max_width, end_chars, word_margin):
+def _is_all_end_chars(text, end_chars):
+    """整个 token 都是闭标点时才允许悬挂。
+
+    2026-10-31：``.NET`` / ``!important`` / ``%s`` 这类词以闭标点开头但后面
+    还有内容，不能把标点留在上一行、把剩下的字母扔到下一行。
+    """
+    return bool(text) and all(char in end_chars for char in text)
+
+
+def _wrap_paragraph(
+    paragraph,
+    advance,
+    max_width,
+    end_chars,
+    word_margin,
+    drift_margin,
+    stray_margin,
+):
     if not _needs_wrapping(paragraph):
         return paragraph
 
     lines = []
     current = []
     x = 0.0
+    glyph_count = 0
     after_break = False
     # 2026-10-25：空格超出边距时先不换行，等下一个词出现再决定，这样闭标点
     # 可以留在上一行，不会被空格挤到行首。
     pending_break = False
 
     def start_new_line():
-        nonlocal x, after_break, pending_break
+        nonlocal x, glyph_count, after_break, pending_break
         while current and current[-1][0] == "space":
             current.pop()
         lines.append("".join(text for _, text in current))
         current.clear()
         x = 0.0
+        glyph_count = 0
         after_break = True
         pending_break = False
+
+    def shift():
+        return drift_margin(x, glyph_count) if drift_margin is not None else 0.0
+
+    def line_limit():
+        # 2026-10-31：stray_margin 留给 handright 随机涂改时多画的那个字。
+        return max_width - shift() - stray_margin
+
+    def word_limit():
+        return max_width - max(word_margin, shift())
 
     for kind, text, width in _tokenize(paragraph, advance):
         if kind == "space":
@@ -94,78 +123,77 @@ def _wrap_paragraph(paragraph, advance, max_width, end_chars, word_margin):
                     continue
                 current.append((kind, text))
                 x += width
+                glyph_count += len(text)
                 continue
-            if x + width > max_width:
+            if x + width > line_limit():
                 pending_break = True
                 continue
             current.append((kind, text))
             x += width
+            glyph_count += len(text)
             continue
 
         if kind == "word":
             if pending_break:
                 # 2026-10-25：先看这个词是不是闭标点；是就悬挂在上一行，不是
                 # 才真正换行。
-                while text and text[0] in end_chars:
-                    char = text[0]
-                    current.append(("char", char))
-                    x += advance(char)
-                    text = text[1:]
                 pending_break = False
-                if not text:
+                if _is_all_end_chars(text, end_chars):
+                    current.append((kind, text))
+                    x += width
+                    glyph_count += len(text)
                     continue
-                width = sum(advance(c) for c in text)
                 start_new_line()
             # 2026-10-25：单词必须整体放下，只有超长的单词才逐字拆开。
-            if x + width <= max_width - word_margin:
+            if x + width <= word_limit():
                 current.append((kind, text))
                 x += width
+                glyph_count += len(text)
                 continue
             indent_only = bool(current) and all(
-                part == "space" for part, _ in current
+                token_kind == "space" or chunk == "　"
+                for token_kind, chunk in current
             )
             if current and not indent_only:
                 # 2026-10-25：闭标点不能落到行首，即使悬挂到右边距外也留在
                 # 当前行。
-                while text and text[0] in end_chars:
-                    char = text[0]
-                    current.append(("char", char))
-                    x += advance(char)
-                    text = text[1:]
-                width = sum(advance(c) for c in text)
-                if not text:
-                    continue
-                if x + width <= max_width - word_margin:
+                if _is_all_end_chars(text, end_chars):
                     current.append((kind, text))
                     x += width
+                    glyph_count += len(text)
                     continue
                 start_new_line()
-            if not indent_only and width <= max_width - word_margin:
+            if not indent_only and width <= word_limit():
                 current.append((kind, text))
                 x += width
+                glyph_count += len(text)
                 continue
             for char in text:
                 # 2026-10-25：沿用 handright 对单个字的规则：笔位仍在上限内
-                # 时才落字。
-                if current and x > max_width:
+                # 时才落字。2026-10-31：闭标点同样不提前断行，且断点要算上
+                # 随机扰动的累计漂移。
+                if current and x > line_limit() and char not in end_chars:
                     start_new_line()
                 current.append(("char", char))
                 x += advance(char)
+                glyph_count += 1
             continue
 
         # 2026-10-25：宽字符在它前面断行；若它是可以悬挂到右边距外的闭标点，
-        # 则不断行，避免落到行首。
+        # 则不断行，避免落到行首。2026-10-31：留出随机扰动的漂移余量。
         if pending_break:
             pending_break = False
             if text in end_chars:
                 current.append((kind, text))
                 x += width
+                glyph_count += 1
                 continue
             start_new_line()
-        if current and x > max_width and text not in end_chars:
+        if current and x > line_limit() and text not in end_chars:
             start_new_line()
         current.append((kind, text))
         x += width
+        glyph_count += 1
 
     start_new_line()
     return "\n".join(lines)
@@ -177,16 +205,29 @@ def break_lines(
     max_width,
     end_chars=CLOSING_PUNCTUATION,
     word_margin=0.0,
+    drift_margin=None,
+    stray_margin=0.0,
 ):
     """在 ``text`` 中插入显式换行。
 
     ``advance(char)`` 返回一个字的笔进宽度，``max_width`` 是可用宽度（页宽减
     去左右边距和一个字宽，与 handright 的上限一致）。``word_margin`` 用于在
     判断单词是否放得下时预留余量，供会扰动字距的调用方使用。
+    ``drift_margin(x, count)`` 返回当前笔位和字数为 ``x`` / ``count`` 时应该
+    预留的累计扰动余量。``stray_margin`` 是额外预留给 handright 随机涂改多画
+    的那个字的宽度（2026-10-31 新增）。
     """
     if max_width <= 0:
         return text
     return "\n".join(
-        _wrap_paragraph(paragraph, advance, max_width, end_chars, word_margin)
+        _wrap_paragraph(
+            paragraph,
+            advance,
+            max_width,
+            end_chars,
+            word_margin,
+            drift_margin,
+            stray_margin,
+        )
         for paragraph in text.split("\n")
     )

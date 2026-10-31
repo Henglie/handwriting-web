@@ -1,3 +1,4 @@
+import random
 import unittest
 from collections import defaultdict
 from pathlib import Path
@@ -73,6 +74,37 @@ def rendered_lines(text, template):
 
 def words_of(lines):
     return [word for line in lines for word in line.split()]
+
+
+def drawn_lines(text, template, seed):
+    """按 handright 实际绘制口径分行，排除涂改功能随机插入的错字。"""
+    positioned = []
+    real_draw_char = handright_core._draw_char
+    real_draw_strikethrough = handright_core._draw_strikethrough
+
+    def record_draw_char(draw, char, xy, font):
+        positioned.append([round(xy[1]), char])
+        return real_draw_char(draw, char, xy, font)
+
+    def record_strikethrough(draw, x, y, tpl, rand):
+        # 划线前画的那个字是 handright 随机抽中的“错字”，不属于正文
+        if positioned:
+            positioned[-1][1] = None
+        return real_draw_strikethrough(draw, x, y, tpl, rand)
+
+    # handright 的涂改位置用的是全局 random，不是 _draft 的 seed，单独钉住
+    random.seed(seed)
+    with (
+        patch.object(handright_core, "_draw_char", record_draw_char),
+        patch.object(handright_core, "_draw_strikethrough", record_strikethrough),
+    ):
+        list(handright_core._draft(text, (template,), seed=seed))
+
+    chars_by_line = defaultdict(list)
+    for y, char in positioned:
+        if char is not None:
+            chars_by_line[y].append(char)
+    return ["".join(chars_by_line[y]) for y in sorted(chars_by_line)]
 
 
 class WordBreakTest(unittest.TestCase):
@@ -168,6 +200,32 @@ class WordBreakTest(unittest.TestCase):
         for line in lines:
             self.assertFalse(line.startswith(","))
 
+    def test_words_starting_with_punctuation_are_not_split(self):
+        for text in (
+            "alpha beta gamma delta .NET framework",
+            "alpha beta gamma !important flag",
+            "alpha beta gamma delta %s placeholder",
+        ):
+            lines = break_lines(text, fixed_advance, 100).split("\n")
+
+            self.assertEqual(words_of(lines), text.split())
+
+    def test_overlong_token_does_not_start_line_with_punctuation(self):
+        text = "start " + "z" * 20 + ",z tail"
+
+        lines = break_lines(text, fixed_advance, 100).split("\n")
+
+        for line in lines:
+            self.assertNotIn(line[:1], CLOSING_PUNCTUATION)
+
+    def test_full_width_indent_before_an_overflowing_word_is_kept(self):
+        text = "　　supercalifragilisticexpialidocious tail"
+
+        lines = break_lines(text, fixed_advance, 100).split("\n")
+
+        self.assertTrue(lines[0].startswith("　　"))
+        self.assertNotEqual(lines[0].strip(), "")
+
 
 class HandrightAgreementTest(unittest.TestCase):
     def test_cjk_breaks_inside_a_mixed_paragraph_match_handright(self):
@@ -205,6 +263,40 @@ class HandrightAgreementTest(unittest.TestCase):
         for line in wrapped.split("\n"):
             self.assertNotIn(line[:1], CLOSING_PUNCTUATION)
 
+    def test_mixed_cjk_layout_survives_default_randomness(self):
+        # 2026-10-31：前端默认的随机扰动会逐字累积，宽字符断点必须留出余量，
+        # 否则 handright 会把最后一字挪到下一行，再撞上这里插入的硬换行。
+        template = Template(
+            background=Image.new("RGB", (2481, 3507), "white"),
+            font=ImageFont.truetype(str(FONT_PATH), size=124),
+            line_spacing=200,
+            left_margin=50,
+            top_margin=50,
+            right_margin=48,
+            bottom_margin=50,
+            word_spacing=1,
+            line_spacing_sigma=0,
+            font_size_sigma=2,
+            word_spacing_sigma=2,
+            perturb_x_sigma=0,
+            perturb_y_sigma=0,
+            perturb_theta_sigma=0,
+            ink_depth_sigma=0,
+            strikethrough_probability=0.005,
+        )
+        text = (
+            "最近在整理一些手写字体相关的资料，发现英文单词在排版时经常被从中间截断，"
+            "比如 handwriting 这个词会被拆成 hand 和 writing 两部分，看起来非常奇怪。"
+        )
+        wrapped = apply_word_wrap(text, template)
+        expected = wrapped.split("\n")
+
+        for seed in range(20):
+            lines = drawn_lines(wrapped, template, seed)
+            self.assertEqual(lines, expected)
+            for line in lines:
+                self.assertGreater(len(line.strip()), 1)
+
 
 class ApplyWordWrapTest(unittest.TestCase):
     def test_cjk_text_is_left_untouched(self):
@@ -212,6 +304,21 @@ class ApplyWordWrapTest(unittest.TestCase):
         text = "这是一段用来测试换行的中文文字，标点符号不应该出现在行首，比如逗号。"
 
         self.assertEqual(apply_word_wrap(text, template), text)
+
+    @patch("app.handwrite")
+    def test_right_aligned_line_is_not_re_wrapped(self, handwrite_mock):
+        # 2026-10-31：右对齐补的全角空格只保证最后一个字的起点在上限内，
+        # 按词断行会把签名最后的 "W" 推到下一行，右对齐失效。
+        handwrite_mock.side_effect = lambda text, _: [text]
+        template = latin_template()
+
+        list(handwrite_with_page_breaks("正文\n>>>Mary W", template))
+
+        rendered = handwrite_mock.call_args.args[0]
+        lines = rendered.split("\n")
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(lines[1].startswith("　"))
+        self.assertTrue(lines[1].endswith("Mary W"))
 
     @patch("app.handwrite")
     def test_page_breaks_are_applied_after_wrapping(self, handwrite_mock):
@@ -236,7 +343,7 @@ class ApplyWordWrapTest(unittest.TestCase):
     ):
         # 2026-10-25：先断行可能把段落末尾的 "---" 挤到单独一行，误命中分页
         # 标记。这里让断行故意输出这种结果，验证分页是在断行之前切的。
-        word_wrap_mock.side_effect = lambda text, _: text.replace(
+        word_wrap_mock.side_effect = lambda text, _, log=True: text.replace(
             " --- ", "\n---\n"
         )
         handwrite_mock.side_effect = lambda text, _: [text]
