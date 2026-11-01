@@ -109,19 +109,19 @@
         </div>
 
         <div class="check-container">
-          <input class="optionUnderline" type="checkbox" id="optionUnderline" name="option2" value="value2" v-model="isUnderlined">
+          <input class="optionCheckbox" type="checkbox" id="optionUnderline" name="option2" value="value2" v-model="isUnderlined">
           <label for="optionUnderline">{{ $t('message.underline') }}</label>
         </div>
 
         <div class="check-container">
-          <input class="optionEnglishSpacing" type="checkbox" id="optionEnglishSpacing" name="optionEnglishSpacing"
+          <input class="optionCheckbox" type="checkbox" id="optionEnglishSpacing" name="optionEnglishSpacing"
             value="englishSpacing" v-model="enableEnglishSpacing">
           <label for="optionEnglishSpacing">{{ $t('message.enableEnglishSpacing') }}</label>
         </div>
 
         <div class="check-container">
-          <input type="checkbox" id="optionTransparentBackground" name="optionTransparentBackground"
-            value="transparentBackground" v-model="transparentBackground"
+          <input class="optionCheckbox" type="checkbox" id="optionTransparentBackground"
+            name="optionTransparentBackground" value="transparentBackground" v-model="transparentBackground"
             data-testid="transparent-background-checkbox">
           <label for="optionTransparentBackground"
             :title="$t('message.transparentBackgroundHint')">{{ $t('message.transparentBackground') }}</label>
@@ -400,16 +400,16 @@
           </button>
         </div>
 
-        <input class="optionUnderline" type="checkbox" id="optionUnderline" name="option2" value="value2"
+        <input class="optionCheckbox" type="checkbox" id="optionUnderline" name="option2" value="value2"
           v-model="isUnderlined">
         <label for="optionUnderline" style="margin-right: 0px;">{{ $t('message.underline') }}</label>
 
-        <input class="optionEnglishSpacing" type="checkbox" id="optionEnglishSpacing" name="optionEnglishSpacing"
+        <input class="optionCheckbox" type="checkbox" id="optionEnglishSpacing" name="optionEnglishSpacing"
           value="englishSpacing" v-model="enableEnglishSpacing">
         <label for="optionEnglishSpacing" style="margin-right: 0px;">{{ $t('message.enableEnglishSpacing') }}</label>
 
-        <input type="checkbox" id="optionTransparentBackground" name="optionTransparentBackground"
-          value="transparentBackground" v-model="transparentBackground"
+        <input class="optionCheckbox" type="checkbox" id="optionTransparentBackground"
+          name="optionTransparentBackground" value="transparentBackground" v-model="transparentBackground"
           data-testid="transparent-background-checkbox">
         <label for="optionTransparentBackground" style="margin-right: 0px;"
           :title="$t('message.transparentBackgroundHint')">{{ $t('message.transparentBackground') }}</label>
@@ -2781,18 +2781,7 @@ input[type="file"]:hover {
   cursor: not-allowed !important;
 }
 
-.optionUnderline {
-  margin: 0;
-  padding: 0;
-  width: 10px;
-  padding: 0 !important;
-  border-radius: 0 !important;
-  border: none !important;
-  box-shadow: none !important;
-  box-sizing: content-box !important;
-}
-
-.optionEnglishSpacing {
+.optionCheckbox {
   margin: 0;
   padding: 0;
   width: 10px;
