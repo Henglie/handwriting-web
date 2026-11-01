@@ -227,15 +227,11 @@ class WordBreakTest(unittest.TestCase):
         self.assertTrue(lines[0].startswith("　　"))
         self.assertNotEqual(lines[0].strip(), "")
 
-    def test_overwide_indentation_does_not_produce_a_blank_line(self):
-        for indent in (" " * 40, "　" * 20):
-            with self.subTest(indent=indent[:1]):
-                lines = break_lines(
-                    indent + "word tail", fixed_advance, 100
-                ).split("\n")
+    def test_overwide_indentation_keeps_the_following_word_whole(self):
+        # 2026-11-01：缩进本身超过行宽时，先把缩进整行落下，优先保住整个词。
+        lines = break_lines(" " * 40 + "word tail", fixed_advance, 100).split("\n")
 
-                self.assertTrue(lines[0].startswith(indent))
-                self.assertNotEqual(lines[0].strip(), "")
+        self.assertEqual(words_of(lines), ["word", "tail"])
 
 
 class HandrightAgreementTest(unittest.TestCase):
