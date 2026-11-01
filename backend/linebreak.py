@@ -112,8 +112,21 @@ def _wrap_paragraph(
         # 2026-10-31：stray_margin 留给 handright 随机涂改时多画的那个字。
         return max_width - shift() - stray_margin
 
+    def keep_limit():
+        # 2026-10-31：留在当前行的单词也要给涂改留余量，否则涂改落在词里会把
+        # 单词推过 handright 的上限、被拆开。
+        return max_width - max(word_margin, shift()) - stray_margin
+
     def word_limit():
+        # 2026-10-31：整词能否放在空行上；这里不扣 stray_margin，避免本来能
+        # 独占一行的单词每次都被逐字拆开。
         return max_width - max(word_margin, shift())
+
+    def indent_only():
+        return bool(current) and all(
+            token_kind == "space" or chunk == "　"
+            for token_kind, chunk in current
+        )
 
     for kind, text, width in _tokenize(paragraph, advance):
         if kind == "space":
@@ -145,16 +158,12 @@ def _wrap_paragraph(
                     continue
                 start_new_line()
             # 2026-10-25：单词必须整体放下，只有超长的单词才逐字拆开。
-            if x + width <= word_limit():
+            if x + width <= keep_limit():
                 current.append((kind, text))
                 x += width
                 glyph_count += len(text)
                 continue
-            indent_only = bool(current) and all(
-                token_kind == "space" or chunk == "　"
-                for token_kind, chunk in current
-            )
-            if current and not indent_only:
+            if current and not indent_only():
                 # 2026-10-25：闭标点不能落到行首，即使悬挂到右边距外也留在
                 # 当前行。
                 if _is_all_end_chars(text, end_chars):
@@ -163,20 +172,28 @@ def _wrap_paragraph(
                     glyph_count += len(text)
                     continue
                 start_new_line()
-            if not indent_only and width <= word_limit():
+            if not indent_only() and width <= word_limit():
                 current.append((kind, text))
                 x += width
                 glyph_count += len(text)
                 continue
+            only_indent = indent_only()
             for char in text:
                 # 2026-10-25：沿用 handright 对单个字的规则：笔位仍在上限内
-                # 时才落字。2026-10-31：闭标点同样不提前断行，且断点要算上
-                # 随机扰动的累计漂移。
-                if current and x > line_limit() and char not in end_chars:
+                # 时才落字。2026-10-31：闭标点同样不提前断行，断点要算上
+                # 随机扰动的累计漂移；缩进本身超宽时也不先断行，避免吐出一行
+                # 只有缩进的空行。
+                if (
+                    current
+                    and x > line_limit()
+                    and char not in end_chars
+                    and not only_indent
+                ):
                     start_new_line()
                 current.append(("char", char))
                 x += advance(char)
                 glyph_count += 1
+                only_indent = False
             continue
 
         # 2026-10-25：宽字符在它前面断行；若它是可以悬挂到右边距外的闭标点，
@@ -189,7 +206,12 @@ def _wrap_paragraph(
                 glyph_count += 1
                 continue
             start_new_line()
-        if current and x > line_limit() and text not in end_chars:
+        if (
+            current
+            and x > line_limit()
+            and text not in end_chars
+            and not indent_only()
+        ):
             start_new_line()
         current.append((kind, text))
         x += width

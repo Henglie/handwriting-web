@@ -77,7 +77,7 @@ def words_of(lines):
 
 
 def drawn_lines(text, template, seed):
-    """按 handright 实际绘制口径分行，排除涂改功能随机插入的错字。"""
+    """2026-10-31：按 handright 实际绘制口径分行，排除涂改功能随机插入的错字。"""
     positioned = []
     real_draw_char = handright_core._draw_char
     real_draw_strikethrough = handright_core._draw_strikethrough
@@ -87,12 +87,13 @@ def drawn_lines(text, template, seed):
         return real_draw_char(draw, char, xy, font)
 
     def record_strikethrough(draw, x, y, tpl, rand):
-        # 划线前画的那个字是 handright 随机抽中的“错字”，不属于正文
+        # 2026-10-31：划线前画的那个字是 handright 随机抽中的“错字”，不属于正文
         if positioned:
             positioned[-1][1] = None
         return real_draw_strikethrough(draw, x, y, tpl, rand)
 
-    # handright 的涂改位置用的是全局 random，不是 _draft 的 seed，单独钉住
+    # 2026-10-31：handright 的涂改位置用的是全局 random，不是 _draft 的 seed，
+    # 单独钉住
     random.seed(seed)
     with (
         patch.object(handright_core, "_draw_char", record_draw_char),
@@ -225,6 +226,16 @@ class WordBreakTest(unittest.TestCase):
 
         self.assertTrue(lines[0].startswith("　　"))
         self.assertNotEqual(lines[0].strip(), "")
+
+    def test_overwide_indentation_does_not_produce_a_blank_line(self):
+        for indent in (" " * 40, "　" * 20):
+            with self.subTest(indent=indent[:1]):
+                lines = break_lines(
+                    indent + "word tail", fixed_advance, 100
+                ).split("\n")
+
+                self.assertTrue(lines[0].startswith(indent))
+                self.assertNotEqual(lines[0].strip(), "")
 
 
 class HandrightAgreementTest(unittest.TestCase):
